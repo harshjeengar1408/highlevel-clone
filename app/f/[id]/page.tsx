@@ -1,9 +1,13 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PublicFormRenderer } from "@/components/forms";
+import { ActionForm } from "@/components/forms";
 import { Icon } from "@/components/icons";
 import { prisma } from "@/lib/prisma";
+import { submitPublicForm } from "@/app/actions/forms";
 
 export const dynamic = "force-dynamic";
+
+type FormField = { label: string; type: string; required?: boolean };
 
 export default async function PublicFormPage({
   params,
@@ -13,66 +17,121 @@ export default async function PublicFormPage({
   searchParams: Promise<{ submitted?: string }>;
 }) {
   const { id } = await params;
-  const query = await searchParams;
+  const { submitted } = await searchParams;
 
   const form = await prisma.form.findUnique({
     where: { id },
-    include: { fields: { orderBy: { order: "asc" } }, location: true },
+    include: { location: true },
   });
 
   if (!form) notFound();
 
-  const fields = form.fields.map((field) => ({
-    id: field.id,
-    label: field.label,
-    type: field.type,
-    placeholder: field.placeholder,
-    options: field.options ? (JSON.parse(field.options) as string[]) : [],
-    required: field.required,
-  }));
+  let fields: FormField[] = [];
+  try {
+    fields = JSON.parse(form.fields);
+  } catch {
+    fields = [];
+  }
+
+  const brand = form.location.accent;
+  const success = submitted === "1";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 px-4 py-10">
-      <div className="mx-auto max-w-xl">
-        <div className="mb-6 flex items-center gap-2.5 text-white">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/10 ring-1 ring-inset ring-white/15">
-            <Icon name="logo" className="h-5 w-5" />
+    <div className="min-h-screen bg-slate-100 px-4 py-10">
+      <div className="mx-auto max-w-lg">
+        <div className="mb-5 flex items-center justify-center gap-2 text-sm font-semibold text-slate-500">
+          <span
+            className="grid h-8 w-8 place-items-center rounded-xl text-xs font-black text-white"
+            style={{ backgroundColor: brand }}
+          >
+            {form.location.name.slice(0, 2).toUpperCase()}
           </span>
-          <div>
-            <p className="text-sm font-semibold">{form.location.name}</p>
-            <p className="text-[11px] text-white/60">{form.location.city}</p>
-          </div>
+          {form.location.name}
         </div>
 
-        <div className="overflow-hidden rounded-2xl bg-white shadow-2xl shadow-black/30">
-          <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-5">
-            <h1 className="text-lg font-bold tracking-tight text-slate-900">
-              {form.headline ?? form.name}
-            </h1>
-            {form.description && (
-              <p className="mt-1 text-xs leading-relaxed text-slate-500">{form.description}</p>
-            )}
+        <div className="card overflow-hidden">
+          <div
+            className="px-6 py-6 text-white"
+            style={{ background: `linear-gradient(135deg, ${brand}, #8b5cf6)` }}
+          >
+            <h1 className="text-xl font-bold tracking-tight">{form.name}</h1>
+            <p className="mt-1 text-sm text-white/80">{form.description}</p>
+            <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-white/80">
+              <span className="inline-flex items-center gap-1.5">
+                <Icon name="phone" className="h-3 w-3" />
+                {form.location.phone ?? "Call us"}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Icon name="globe" className="h-3 w-3" />
+                {form.location.website ?? form.location.name}
+              </span>
+            </div>
           </div>
 
-          <div className="px-6 py-5">
-            {query.submitted ? (
-              <div className="py-8 text-center">
-                <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-50 text-emerald-600">
-                  <Icon name="checkCircle" className="h-7 w-7" />
+          <div className="p-6">
+            {!form.published ? (
+              <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800 ring-1 ring-inset ring-amber-200">
+                This form isn&apos;t accepting responses yet. Publish it from Forms &amp; Funnels to go live.
+              </div>
+            ) : success ? (
+              <div className="py-6 text-center">
+                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-emerald-50 text-emerald-600">
+                  <Icon name="check" className="h-6 w-6" />
                 </span>
-                <h2 className="mt-4 text-base font-semibold text-slate-900">You're all set!</h2>
-                <p className="mx-auto mt-1 max-w-sm text-xs text-slate-500">
-                  Thanks for reaching out — a member of the team will contact you shortly.
+                <h2 className="mt-3 text-lg font-bold text-slate-900">You&apos;re all set!</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Thanks for reaching out — our team will follow up shortly. A contact record and activity
+                  entry were created automatically.
                 </p>
+                <Link href={`/f/${form.id}`} className="btn btn-secondary mt-4 inline-flex">
+                  Submit another response
+                </Link>
               </div>
             ) : (
-              <PublicFormRenderer formId={form.id} fields={fields} /></n>
+              <ActionForm
+                action={submitPublicForm as never}
+                submitLabel="Submit response"
+                cancelLabel={null}
+                submitVariant="primary"
+                className="space-y-4"
+                resetOnSuccess={false}
+              >
+                <input type="hidden" name="formId" value={form.id} />
+                {fields.map((field) => (
+                  <div key={field.label}>
+                    <label className="label" htmlFor={field.label}>
+                      {field.label}
+                      {field.required && <span className="text-rose-500"> *</span>}
+                    </label>
+                    {field.type === "textarea" ? (
+                      <textarea
+                        id={field.label}
+                        name={field.label}
+                        rows={3}
+                        required={field.required}
+                        className="input"
+                      />
+                    ) : (
+                      <input
+                        id={field.label}
+                        name={field.label}
+                        type={field.type || "text"}
+                        required={field.required}
+                        className="input"
+                      />
+                    )}
+                  </div>
+                ))}
+                <p className="text-[11px] text-slate-400">
+                  By submitting you agree to be contacted about your request. We never share your details.
+                </p>
+              </ActionForm>
             )}
           </div>
         </div>
 
-        <p className="mt-5 text-center text-[11px] text-white/40">
-          {form.location.name} · {form.location.phone}
+        <p className="mt-4 text-center text-[11px] text-slate-400">
+          Powered by HighLevel — CRM, funnels and automation.
         </p>
       </div>
     </div>

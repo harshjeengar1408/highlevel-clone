@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import { useActionState } from "react";
 import { signIn, signUp, type AuthState } from "@/app/actions/auth";
