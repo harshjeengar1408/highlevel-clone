@@ -163,7 +163,11 @@ export default async function DashboardPage() {
         subtitle={`Here's what's happening at ${user.location.name} today.`}
         actions={
           <>
-            <NewContactModal owners={owners} label="New contact" variant="secondary" />
+            <NewContactModal
+              owners={owners}
+              label="New contact"
+              variant="secondary"
+            />
             <NewOpportunityModal
               pipelines={pipelines.map((item) => ({
                 id: item.id,
