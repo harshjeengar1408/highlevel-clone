@@ -1,75 +1,68 @@
+import Link from "next/link";
 import { headers } from "next/headers";
-import { ActionButton, ActionForm, Modal } from "@/components/forms";
-import { CopyButton } from "@/components/forms";
+import { ActionButton, ActionForm, CopyButton, Modal } from "@/components/forms";
 import { Icon } from "@/components/icons";
-import { Badge, EmptyState, PageHeader, StatCard } from "@/components/ui";
+import { Badge, EmptyState, PageHeader, StatCard, StatusBadge } from "@/components/ui";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { createForm, deleteForm, toggleForm } from "@/app/actions/forms";
-import { number, relativeTime } from "@/lib/format";
+import { formatDate, number, relativeTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
-
-const FIELD_TYPES = [
-  "text",
-  "email",
-  "phone",
-  "textarea",
-  "select",
-  "date",
-  "number",
-  "checkbox",
-];
 
 export default async function FormsPage() {
   const user = await requireUser();
   const headerList = await headers();
-  const host = headerList.get("host") ?? "localhost:3000";
-  const protocol = host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
-  const origin = `${protocol}://${host}`;
+  const host = headerList.get("x-forwarded-host") ?? headerList.get("host") ?? "localhost:3000";
+  const proto = headerList.get("x-forwarded-proto") ?? (host.includes("localhost") ? "http" : "https");
+  const origin = `${proto}://${host}`;
 
   const forms = await prisma.form.findMany({
     where: { locationId: user.locationId },
     include: {
-      fields: { orderBy: { order: "asc" } },
-      submissions: { orderBy: { createdAt: "desc" }, take: 5, include: { contact: true } },
+      submissions: {
+        include: { contact: true },
+        orderBy: { createdAt: "desc" },
+        take: 8,
+      },
       _count: { select: { submissions: true } },
     },
     orderBy: { createdAt: "desc" },
   });
 
   const totalSubmissions = forms.reduce((sum, form) => sum + form._count.submissions, 0);
-  const published = forms.filter((form) => form.isPublished).length;
+  const totalViews = forms.reduce((sum, form) => sum + form.views, 0);
+  const conversion = totalViews > 0 ? Math.round((totalSubmissions / totalViews) * 100) : 0;
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Forms & funnels"
-        subtitle="Capture leads with hosted forms — every submission lands in your CRM instantly."
+        title="Forms & Funnels"
+        subtitle="Capture leads on any page. Every submission creates a contact and can start an automation."
         actions={
           <Modal
             label="New form"
             icon="plus"
-            title="Create a lead capture form"
-            description="Pick a template and we'll build the first fields for you."
+            title="Create a form"
+            description="Add one field per line using Label | type (text, email, tel, textarea, date)."
           >
             <ActionForm action={createForm as never} submitLabel="Create form">
               <div>
                 <label className="label">Form name</label>
-                <input name="name" required className="input" placeholder="Free estimate request" />
+                <input name="name" required className="input" placeholder="Spring tune-up booking" />
               </div>
               <div>
-                <label className="label">Headline</label>
-                <input name="headline" className="input" placeholder="Get a free estimate today" />
+                <label className="label">Description</label>
+                <input name="description" className="input" placeholder="Used on the seasonal landing page" />
               </div>
               <div>
-                <label className="label">Template</label>
-                <select name="template" className="input" defaultValue="estimate">
-                  <option value="estimate">Estimate request</option>
-                  <option value="contact">Contact us</option>
-                  <option value="booking">Appointment booking</option>
-                  <option value="survey">Customer survey</option>
-                </select>
+                <label className="label">Fields</label>
+                <textarea
+                  name="fields"
+                  rows={5}
+                  className="input font-mono text-xs"
+                  defaultValue={"Full name | text\nEmail | email\nPhone | tel\nWhat do you need? | textarea"}
+                />
               </div>
             </ActionForm>
           </Modal>
@@ -77,22 +70,10 @@ export default async function FormsPage() {
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Forms" value={number(forms.length)} hint={`${published} published`} icon="form" tone="indigo" />
-        <StatCard label="Submissions" value={number(totalSubmissions)} hint="All time" icon="inbox" tone="violet" />
-        <StatCard
-          label="Contacts created"
-          value={number(totalSubmissions)}
-          hint="Auto-added to CRM"
-          icon="users"
-          tone="emerald"
-        />
-        <StatCard
-          label="Avg per form"
-          value={number(forms.length ? Math.round(totalSubmissions / forms.length) : 0)}
-          hint="Submissions"
-          icon="chart"
-          tone="amber"
-        />
+        <StatCard label="Published forms" value={number(forms.filter((form) => form.published).length)} hint={`${forms.length} total`} icon="form" tone="indigo" />
+        <StatCard label="Submissions" value={number(totalSubmissions)} hint="All time" icon="users" tone="violet" />
+        <StatCard label="Form views" value={number(totalViews)} hint="Across published forms" icon="globe" tone="sky" />
+        <StatCard label="Opt-in rate" value={`${conversion}%`} hint="Submissions ÷ views" icon="target" tone="emerald" />
       </div>
 
       {forms.length === 0 ? (
@@ -100,35 +81,37 @@ export default async function FormsPage() {
           <EmptyState
             icon="form"
             title="No forms yet"
-            description="Create a form to start capturing leads from your website or ads."
+            description="Create a lead capture form and share its public link anywhere."
           />
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
           {forms.map((form) => {
+            let fields: Array<{ label: string; type: string; required?: boolean }> = [];
+            try {
+              fields = JSON.parse(form.fields);
+            } catch {
+              fields = [];
+            }
             const publicUrl = `${origin}/f/${form.id}`;
+
             return (
-              <div key={form.id} className="card flex flex-col">
-                <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div className="min-w-0">
+              <div key={form.id} className="card flex flex-col overflow-hidden">
+                <div className="flex items-start gap-3 border-b border-slate-100 px-5 py-4">
+                  <span className="rounded-xl bg-indigo-50 p-2 text-indigo-600">
+                    <Icon name="form" className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="truncate text-sm font-semibold text-slate-900">{form.name}</h2>
-                      <Badge tone={form.isPublished ? "green" : "slate"}>
-                        {form.isPublished ? "Live" : "Draft"}
-                      </Badge>
+                      <h2 className="text-sm font-semibold text-slate-900">{form.name}</h2>
+                      <StatusBadge value={form.published ? "published" : "draft"} />
                     </div>
-                    <p className="mt-0.5 truncate text-xs text-slate-500">
-                      {form.headline}
-                    </p>
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      {form.fields.length} fields · {number(form._count.submissions)} submissions ·
-                      updated {relativeTime(form.updatedAt)}
-                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">{form.description}</p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
+                  <div className="flex shrink-0 items-center gap-1">
                     <ActionButton
                       action={toggleForm.bind(null, form.id)}
-                      label={form.isPublished ? "Unpublish" : "Publish"}
+                      label={form.published ? "Unpublish" : "Publish"}
                       variant="secondary"
                       className="btn-sm"
                     />
@@ -139,77 +122,109 @@ export default async function FormsPage() {
                       title="Delete form"
                       variant="danger"
                       compact
-                      confirm={`Delete "${form.name}"? Submissions will be removed too.`}
+                      confirm={`Delete "${form.name}" and its submissions?`}
                     />
                   </div>
                 </div>
 
-                <div className="flex-1 px-5 py-4">
-                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                    Fields
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {form.fields.map((field) => (
-                      <span
-                        key={field.id}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-50 px-2 py-1 text-[10px] text-slate-600 ring-1 ring-inset ring-slate-200"
-                      >
-                        {field.label}
-                        <span className="text-slate-400">{field.type}</span>
-                        {field.required && <span className="text-rose-500">*</span>}
-                      </span>
-                    ))}
+                <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100 text-center">
+                  <div className="px-3 py-2.5">
+                    <p className="text-sm font-bold text-slate-900">{number(form._count.submissions)}</p>
+                    <p className="text-[10px] uppercase tracking-wide text-slate-400">Submissions</p>
                   </div>
-
-                  <div className="mt-3 flex items-center gap-2 rounded-xl bg-slate-50 p-2 ring-1 ring-inset ring-slate-200">
-                    <Icon name="link" className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                    <span className="truncate font-mono text-[10px] text-slate-500">{publicUrl}</span>
-                    <CopyButton value={publicUrl} />
-                    <a
-                      href={`/f/${form.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="shrink-0 rounded-lg px-1.5 py-1 text-slate-400 hover:bg-white hover:text-indigo-600"
-                      title="Open form"
-                    >
-                      <Icon name="external" className="h-3.5 w-3.5" />
-                    </a>
+                  <div className="px-3 py-2.5">
+                    <p className="text-sm font-bold text-slate-900">{number(form.views)}</p>
+                    <p className="text-[10px] uppercase tracking-wide text-slate-400">Views</p>
                   </div>
-
-                  {form.submissions.length > 0 && (
-                    <details className="mt-3">
-                      <summary className="cursor-pointer text-[11px] font-medium text-indigo-600 marker:content-none">
-                        Recent submissions ({form.submissions.length})
-                      </summary>
-                      <ul className="mt-2 divide-y divide-slate-100">
-                        {form.submissions.map((submission) => (
-                          <li key={submission.id} className="flex items-center justify-between gap-2 py-1.5">
-                            <div className="min-w-0">
-                              <p className="truncate text-[11px] font-medium text-slate-700">
-                                {submission.contact
-                                  ? `${submission.contact.firstName} ${submission.contact.lastName}`
-                                  : "Anonymous"}
-                              </p>
-                              <p className="text-[10px] text-slate-400">
-                                {relativeTime(submission.createdAt)}
-                              </p>
-                            </div>
-                            <Badge tone="green">new</Badge>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
+                  <div className="px-3 py-2.5">
+                    <p className="text-sm font-bold text-slate-900">{fields.length}</p>
+                    <p className="text-[10px] uppercase tracking-wide text-slate-400">Fields</p>
+                  </div>
                 </div>
+
+                <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+                  <CopyButton value={publicUrl} />
+                  <Link
+                    href={`/f/${form.id}`}
+                    target="_blank"
+                    className="btn btn-secondary btn-sm"
+                  >
+                    <Icon name="globe" className="h-3.5 w-3.5" />
+                    Open form
+                  </Link>
+                  <span className="ml-auto text-[10px] text-slate-400">
+                    Updated {formatDate(form.createdAt)}
+                  </span>
+                </div>
+
+                <details className="group mt-auto border-t border-slate-100">
+                  <summary className="flex cursor-pointer items-center justify-between px-5 py-3 text-xs font-semibold text-slate-600">
+                    Latest submissions
+                    <Icon
+                      name="chevronDown"
+                      className="h-3.5 w-3.5 text-slate-400 transition-transform group-open:rotate-180"
+                    />
+                  </summary>
+                  {form.submissions.length === 0 ? (
+                    <p className="px-5 pb-4 text-xs text-slate-400">No submissions yet.</p>
+                  ) : (
+                    <ul className="divide-y divide-slate-100 border-t border-slate-100">
+                      {form.submissions.map((submission) => {
+                        let payload: Record<string, string> = {};
+                        try {
+                          payload = JSON.parse(submission.data);
+                        } catch {
+                          payload = {};
+                        }
+                        return (
+                          <li key={submission.id} className="px-5 py-2.5">
+                            <div className="flex items-center gap-2">
+                              {submission.contact ? (
+                                <Link
+                                  href={`/contacts/${submission.contactId}`}
+                                  className="text-xs font-semibold text-slate-800 hover:text-indigo-600"
+                                >
+                                  {submission.contact.firstName} {submission.contact.lastName}
+                                </Link>
+                              ) : (
+                                <span className="text-xs font-semibold text-slate-700">Unknown</span>
+                              )}
+                              <span className="ml-auto text-[10px] text-slate-400">
+                                {relativeTime(submission.createdAt)}
+                              </span>
+                            </div>
+                            <p className="truncate text-[11px] text-slate-500">
+                              {Object.entries(payload)
+                                .slice(0, 3)
+                                .map(([key, value]) => `${key}: ${value || "—"}`)
+                                .join(" · ")}
+                            </p>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </details>
               </div>
             );
           })}
         </div>
       )}
 
-      <p className="text-center text-[11px] text-slate-400">
-        Field types supported: {FIELD_TYPES.join(", ")}
-      </p>
+      <div className="card flex flex-wrap items-center gap-3 p-5">
+        <Badge tone="violet">
+          <Icon name="sparkle" className="h-3 w-3" />
+          Pro tip
+        </Badge>
+        <p className="text-xs text-slate-600">
+          Pair a published form with the <strong>New Lead Nurture</strong> workflow and every submission gets
+          an instant SMS reply.
+        </p>
+        <Link href="/automations" className="btn btn-secondary btn-sm ml-auto">
+          Open automations
+          <Icon name="arrowRight" className="h-3.5 w-3.5" />
+        </Link>
+      </div>
     </div>
   );
 }
